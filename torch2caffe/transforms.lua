@@ -7,72 +7,81 @@ LICENSE file in the root directory of this source tree. An additional grant
 of patent rights can be found in the PATENTS file in the same directory.
 --]]
 require 'torch'
-local logging = require 'fb.util.logging'
 local M = {}
 
 local function fold_sequential_batch_norm_layer(model)
     local new_model = nn.Sequential()
     for i = 1, #model.modules do
         (function()
-                local layer_type = torch.type(model.modules[i])
-                local batch_norm_layer_type
-                if os.getenv("HACK_SKIP_SPATIAL_BN") then
-                    batch_norm_layer_type = 'nn.BatchNormalization'
-                else
-                    batch_norm_layer_type = 'nn..*BatchNormalization'
-                end
-                if string.find(layer_type, batch_norm_layer_type) then
-                    logging.infof("Got bn layer: %s, skipping", layer_type)
-                    return
-                end
+            local layer_type = torch.type(model.modules[i])
+            local batch_norm_layer_type
+            if os.getenv("HACK_SKIP_SPATIAL_BN") then
+                batch_norm_layer_type = 'nn.BatchNormalization'
+            else
+                batch_norm_layer_type = 'nn..*BatchNormalization'
+            end
+            if string.find(layer_type, batch_norm_layer_type) then
+                print(("Got bn layer: %s, skipping"):format(layer_type))
+                return
+            end
 
-                if i + 1 > #model.modules then
-                    new_model:add(
-                        M.fold_batch_normalization_layers(model.modules[i]))
-                    return
-                end
+            if i + 1 > #model.modules then
+                new_model:add(
+                    M.fold_batch_normalization_layers(model.modules[i]))
+                return
+            end
 
-                local next_layer_type = torch.type(model.modules[i+1])
-                if not string.find(next_layer_type, 'nn..*BatchNormalization')
-                then
-                    new_model:add(
-                        M.fold_batch_normalization_layers(model.modules[i]))
-                    return
-                end
-                logging.infof("Current: %s, Next: %s", layer_type, next_layer_type)
-                assert(string.find(layer_type, 'nn.SpatialConvolution')
-                           or string.find(layer_type, 'nn.Linear'))
-                local new_module = model.modules[i]:clone()
-                local bn_layer = model.modules[i+1]
-                assert(bn_layer.running_mean)
-                assert(bn_layer.running_std)
-                local mean = bn_layer.running_mean
-                local std = bn_layer.running_std
-                local a2 = bn_layer.weight
-                local b2 = bn_layer.bias
-                local sz = new_module.weight:size()
-                local nc = sz[1]
-                sz[1] = 1
+            local next_layer_type = torch.type(model.modules[i+1])
+            if not string.find(next_layer_type, 'nn..*BatchNormalization')
+            then
+                new_model:add(
+                    M.fold_batch_normalization_layers(model.modules[i]))
+                return
+            end
+            print(("Current: %s, Next: %s"):format(layer_type, next_layer_type))
+            assert(string.find(layer_type, 'nn.SpatialConvolution')
+                       or string.find(layer_type, 'nn.Linear'))
+            local bn_layer = model.modules[i+1]
+            assert(bn_layer.running_mean)
+            assert(bn_layer.running_var)
+            local mean = bn_layer.running_mean
+            local var = bn_layer.running_var
+            local std = var:add(bn_layer.eps):pow(-0.5)
+            local a2 = bn_layer.weight
+            local b2 = bn_layer.bias
+            local sz = model.modules[i].weight:size()
+            local nc = sz[1]
+            sz[1] = 1
 
-                -- ((a * x + b) - m) * std => a * std * x + (b-m) * std
-                new_module.bias:add(-1, mean)
-                new_module.bias:cmul(std)
-                local buf = torch.repeatTensor(std:view(nc, 1), sz)
-                new_module.weight:cmul(buf)
-                mean:zero()
-                std:fill(1)
+            -- ((a * x + b) - m) * std => a * std * x + (b-m) * std
+            local new_module = model.modules[i]
+            new_module.bias:add(-1, mean)
+            new_module.bias:cmul(std)
+            local buf = nil
+            if new_module.weight:dim() == 4 then
+                buf = torch.repeatTensor(std:view(nc, 1, 1, 1), sz)
+            elseif new_module.weight:dim() == 2 then
+                buf = torch.repeatTensor(std:view(nc, 1), sz)
+            end
+            new_module.weight:cmul(buf)
+            mean:zero()
+            std:fill(1)
 
-                if bn_layer.affine then
-                    -- a2 * (a1 * x + b1) + b2 => a2 * a1 * x + a2 * b1 + b2
-                    new_module.bias:cmul(a2)
-                    new_module.bias:add(b2)
+            if bn_layer.affine then
+                -- a2 * (a1 * x + b1) + b2 => a2 * a1 * x + a2 * b1 + b2
+                new_module.bias:cmul(a2)
+                new_module.bias:add(b2)
+                if new_module.weight:dim() == 4 then
+                    buf = torch.repeatTensor(a2:view(nc, 1, 1, 1), sz)
+                elseif new_module.weight:dim() == 2 then
                     buf = torch.repeatTensor(a2:view(nc, 1), sz)
-                    new_module.weight:cmul(buf)
-                    a2:fill(1)
-                    b2:zero()
                 end
-                new_model:add(new_module)
-         end
+                new_module.weight:cmul(buf)
+                a2:fill(1)
+                b2:zero()
+            end
+            new_model:add(new_module)
+        end
         )()
     end
     return new_model

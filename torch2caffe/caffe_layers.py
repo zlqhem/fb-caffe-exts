@@ -23,7 +23,10 @@ log = logging.getLogger(__name__)
 
 
 def as_blob(array):
-    return caffe.io.array_to_blobproto(array)
+    blob = pb2.BlobProto()
+    blob.shape.dim.extend(array.shape)
+    blob.data.extend(array.astype(float).flat)
+    return blob
 
 
 def ty(caffe_type):
@@ -164,7 +167,11 @@ def pooling(torch_layer):
         return layer
 
     if not torch_layer["ceil_mode"]:
-        layer.pooling_param.torch_pooling = True
+        # layer.pooling_param.torch_pooling = True
+        if dH > 1:
+            layer.pooling_param.pad_h = padH - 1
+        if dW > 1:
+            layer.pooling_param.pad_w = padW - 1
     return layer
 
 
@@ -246,6 +253,29 @@ def softmax(opts):
     return ty(softmax_ty)
 
 
+def eltwise(torch_layer):
+    layer = pb2.LayerParameter()
+    layer.type = "Eltwise"
+    return layer
+
+
+def bn(torch_layer):
+    layer = pb2.LayerParameter()
+    layer.type = "BN"
+    param_scale = pb2.ParamSpec()
+    param_scale.lr_mult = 1
+    param_scale.decay_mult = 0
+    param_bias = pb2.ParamSpec()
+    param_bias.lr_mult = 1
+    param_bias.decay_mult = 0
+    layer.param.extend([param_scale, param_bias])
+    layer.bn_param.slope_filler.value = 1
+    layer.bn_param.bias_filler.value = 0
+    layer.blobs.extend([as_blob(torch_layer[name][None, :]) for name in [
+        'weight', 'bias', 'running_mean', 'running_var']])
+    return layer
+
+
 def build_converter(opts):
     return {
         'caffe.Concat': concat,
@@ -266,6 +296,8 @@ def build_converter(opts):
         'caffe.Flatten': ty('Flatten'),
         'caffe.FBThreshold': fbthreshold,
         'caffe.LSTM': lstm,
+        'caffe.Eltwise': eltwise,
+        'caffe.BN': bn,
     }
 
 

@@ -9,7 +9,6 @@ of patent rights can be found in the PATENTS file in the same directory.
 local M = {}
 
 local py = require 'fb.python'
-local logging = require 'fb.util.logging'
 local pl = require('pl.import_into')()
 
 -- Various libraries for loading Torch layers.
@@ -229,7 +228,7 @@ M.CONVERTER = {
         typename='caffe.Flatten',
         layer=function(layer)
             if layer.size:size() ~= 1 then
-                logging.fatalf("Only handle nn.View(k) for now")
+                error("Only handle nn.View(k) for now")
             end
             return {}
         end},
@@ -252,10 +251,29 @@ M.CONVERTER = {
         typename='caffe.Flatten',
         layer=function(layer)
             if layer.size:size() ~= 1 then
-                logging.fatalf("Only handle nn.Reshape(k) for now")
+                error("Only handle nn.Reshape(k) for now")
             end
             return {}
         end},
+    ['nn.Identity'] = function(net, layer, bottom_edges, top_edges)
+        return bottom_edges
+    end,
+    ['nn.Copy'] = function(net, layer, bottom_edges, top_edges)
+        return bottom_edges
+    end,
+    ['nn.CAddTable'] = function(net, layer, bottom_edges, top_edges)
+        return py.eval(
+            net.add_layer("caffe.Eltwise",
+                          layer,
+                          bottom_edges,
+                          top_edges,
+                          #bottom_edges,
+                          1,
+                          false))
+    end,
+    ['nn.SpatialBatchNormalization'] = simple{
+        typename='caffe.BN'
+    },
 }
 
 function M.add(net, layer, bottom_edges, top_edges)
@@ -265,9 +283,9 @@ function M.add(net, layer, bottom_edges, top_edges)
             return converter(net, layer, bottom_edges, top_edges)
         end
     end
-    logging.fatalf("Unknown layer type: %s, known types: %s",
+    error(("Unknown layer type: %s, known types: %s"):format(
                    layer_type,
-                   pl.stringx.join(", ", pl.tablex.keys(M.CONVERTER)))
+                   pl.stringx.join(", ", pl.tablex.keys(M.CONVERTER))))
 end
 
 return M
