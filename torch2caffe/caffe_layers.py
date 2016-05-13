@@ -83,12 +83,14 @@ def inner_product(torch_layer):
     layer.type = "InnerProduct"
     num_output = int(torch_layer["num_output"])
     weight = torch_layer["weight"]
-    bias = torch_layer["bias"]
     layer.inner_product_param.num_output = num_output
-
-    # Last layer.
     layer.inner_product_param.axis = -1
-    layer.blobs.extend([as_blob(weight), as_blob(bias)])
+    if "bias" in torch_layer:
+        bias = torch_layer["bias"]
+        layer.blobs.extend([as_blob(weight), as_blob(bias)])
+    else:
+        layer.inner_product_param.bias_term = False
+        layer.blobs.extend([as_blob(weight)])
     return layer
 
 
@@ -123,7 +125,6 @@ def temporal_convolution(torch_layer):
 def spatial_convolution(torch_layer):
     layer = pb2.LayerParameter()
     layer.type = "Convolution"
-    bias = torch_layer["bias"]
     weight = torch_layer["weight"]
     assert len(weight.shape) == 4, weight.shape
     (nOutputPlane, nInputPlane, kH_, kW_) = weight.shape
@@ -140,8 +141,13 @@ def spatial_convolution(torch_layer):
     layer.convolution_param.kernel_h = kH
     layer.convolution_param.stride_h = dH
     layer.convolution_param.pad_h = padH
+    if "bias" in torch_layer:
+        bias = torch_layer["bias"]
+        layer.blobs.extend([as_blob(weight), as_blob(bias)])
+    else:
+        layer.convolution_param.bias_term = False
+        layer.blobs.extend([as_blob(weight)])
 
-    layer.blobs.extend([as_blob(weight), as_blob(bias)])
     return layer
 
 
