@@ -15,6 +15,30 @@ local function adapt_conv1(layer)
   layer.weight = tmp:clone()
 end
 
+local function adapt_sequential_dropout(model)
+  -- does not support recursive sequential(dropout)
+  for k, block in pairs(model:findModules('nn.SequentialDropout')) do
+    -- find last conv / bn / linear layer and scale its weight by 1-p
+    local found = false
+    for j = #block.modules,1,-1 do
+      local block_type = torch.type(block.modules[j])
+      if block_type == 'nn.SpatialConvolution'
+          or block_type == 'nn.Linear'
+          or block_type == 'nn.SpatialBatchNormalization' then
+        block.modules[j].weight:mul(1 - block.p)
+        if block.modules[j].bias then
+          block.modules[j].bias:mul(1 - block.p)
+        end
+        found = true
+        break
+      end
+    end
+    if not found then
+      error('SequentialDropout module cannot find weight to scale')
+    end
+  end
+end
+
 g_t2c_preprocess = function(model, opts)
   model = cudnn.convert(model, nn)
   --model = trans.fold_batch_normalization_layers(model, opts)
@@ -37,6 +61,7 @@ g_t2c_preprocess = function(model, opts)
     layer.running_var = layer.running_var:float()
   end
   adapt_conv1(model.modules[1])
+  adapt_sequential_dropout(model)
   return model
 end
 
