@@ -274,6 +274,14 @@ M.CONVERTER = {
     ['nn.SpatialBatchNormalization'] = simple{
         typename='caffe.BN'
     },
+    ['nn.MulConstant'] = simple{
+        typename="caffe.Power",
+        layer=function(layer)
+            layer["power"] = 1
+            layer["shift"] = 0
+            layer["scale"] = layer.constant_scalar
+            return layer
+        end},
 }
 
 function M.add(net, layer, bottom_edges, top_edges)
