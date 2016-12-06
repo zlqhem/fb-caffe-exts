@@ -87,7 +87,7 @@ function M.compare(opts, torch_net)
     -- Torch multi-inputs take an ordered Table.
     local function inputs_to_torch_inputs(inputs, type)
         if #inputs == 1 then
-            return inputs[1].tensor:type(type)
+            return {inputs[1].tensor:type(type)}
         end
         local tensors = {}
         for i=1,#inputs do
@@ -104,7 +104,7 @@ function M.compare(opts, torch_net)
             torch_outputs = torch_net:forward(torch_inputs)
     end)
     if not ok then
-        print("Got error running forward: %s", err)
+        print(("Got error running forward: %s"):format(err))
         torch_net:cuda()
         local torch_inputs = inputs_to_torch_inputs(
             inputs, 'torch.CudaTensor')
